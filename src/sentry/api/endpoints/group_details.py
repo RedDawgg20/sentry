@@ -185,6 +185,48 @@ class GroupDetailsEndpoint(GroupEndpoint, EnvironmentMixin):
             for item, version in zip(serialized_releases, versions)
         ]
 
+    def _get_current_release(self, group, environments):
+        """Get the current release in the group's project.
+
+        Produce a reference to the most recent release in the project
+        associated with the issue being viewed. This is regardless of
+        whether the issue has been reported in that release. (It is the
+        latest release in which the user might expect to have seen it.)
+
+        If the user is filtering by environment, include only releases
+        in those environments. If `environments` is empty, include all
+        environments because the user is not filtering.
+
+        :param group: the group in whose projects to find the release
+        :param environments: the set of environments in which to filter
+            releases; include all environments if empty
+        :return: a GroupRelease object referring to the current release,
+            or None if the release does not exist
+        """
+
+        release_projects = ReleaseProject.objects.filter(project_id=group.project_id).values_list(
+            "release_id", flat=True
+        )
+
+        release_envs = ReleaseEnvironment.objects.filter(
+            release_id__in=release_projects, organization_id=group.project.organization_id,
+        )
+        if environments:
+            release_envs = release_envs.filter(environment_id__in=[env.id for env in environments])
+        release_envs = release_envs.order_by("-first_seen").values_list("release_id", flat=True)
+
+        group_releases = GroupRelease.objects.filter(
+            group_id=group.id, release_id=release_envs[:1],
+        )
+        if environments:
+            group_releases = group_releases.filter(
+                environment__in=[env.name for env in environments],
+            )
+        try:
+            return group_releases[0]
+        except IndexError:
+            return None
+
     @attach_scenarios([retrieve_aggregate_scenario])
     def get(self, request, group):
         """
@@ -284,43 +326,21 @@ class GroupDetailsEndpoint(GroupEndpoint, EnvironmentMixin):
                 }
             )
 
-            # the current release is the 'latest seen' release within the
-            # environment even if it hasnt affected this issue
-            if environments:
-                with sentry_sdk.start_span(op="GroupDetailsEndpoint.get.current_release") as span:
-                    span.set_data("Environment Count", len(environments))
-                    span.set_data(
-                        "Raw Parameters",
-                        {
-                            "group.id": group.id,
-                            "group.project_id": group.project_id,
-                            "group.project.organization_id": group.project.organization_id,
-                            "environments": [{"id": e.id, "name": e.name} for e in environments],
-                        },
-                    )
-
-                    try:
-                        current_release = GroupRelease.objects.filter(
-                            group_id=group.id,
-                            environment__in=[env.name for env in environments],
-                            release_id=(
-                                ReleaseEnvironment.objects.filter(
-                                    release_id__in=ReleaseProject.objects.filter(
-                                        project_id=group.project_id
-                                    ).values_list("release_id", flat=True),
-                                    organization_id=group.project.organization_id,
-                                    environment_id__in=environment_ids,
-                                )
-                                .order_by("-first_seen")
-                                .values_list("release_id", flat=True)
-                            )[:1],
-                        )[0]
-                    except IndexError:
-                        current_release = None
-
-                data["currentRelease"] = serialize(
-                    current_release, request.user, GroupReleaseWithStatsSerializer()
+            with sentry_sdk.start_span(op="GroupDetailsEndpoint.get.current_release") as span:
+                span.set_data("Environment Count", len(environments))
+                span.set_data(
+                    "Raw Parameters",
+                    {
+                        "group.id": group.id,
+                        "group.project_id": group.project_id,
+                        "group.project.organization_id": group.project.organization_id,
+                        "environments": [{"id": e.id, "name": e.name} for e in environments],
+                    },
                 )
+                current_release = self._get_current_release(group, environments)
+            data["currentRelease"] = serialize(
+                current_release, request.user, GroupReleaseWithStatsSerializer()
+            )
 
             metrics.incr("group.update.http_response", sample_rate=1.0, tags={"status": 200})
             return Response(data)

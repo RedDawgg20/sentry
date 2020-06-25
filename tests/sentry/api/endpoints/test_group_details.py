@@ -98,7 +98,7 @@ class GroupDetailsTest(APITestCase, SnubaTestCase):
         assert response.data["firstRelease"] is None
         assert response.data["lastRelease"] is None
 
-    def _test_current_release(self, group_seen_on_latest_release):
+    def _set_up_current_release(self, group_seen_on_latest_release):
         clock = MockClock()
 
         # Create several of everything, to exercise all filtering clauses.
@@ -109,9 +109,10 @@ class GroupDetailsTest(APITestCase, SnubaTestCase):
             team = self.create_team(organization=organization)
             self.create_team_membership(team=team, user=self.user)
 
-            prod = self.create_environment(name="production", organization=organization)
-            dev = self.create_environment(name="development", organization=organization)
-            environments = (prod, dev)
+            environments = [
+                self.create_environment(name=env_name, organization=organization)
+                for env_name in ("production", "development")
+            ]
 
             def set_up_project():
                 project = self.create_project(organization=organization, teams=[team])
@@ -144,36 +145,50 @@ class GroupDetailsTest(APITestCase, SnubaTestCase):
                         latest_seen = seen_on(target_group, later_release, environment)
                     return latest_seen
 
-                target_group_release = set_up_group_releases(prod)
-                set_up_group_releases(dev)
-
-                return project, target_group, target_group_release
+                target_releases = {env.name: set_up_group_releases(env) for env in environments}
+                return target_group, target_releases
 
             set_up_project()
-            target_project, target_group, target_group_release = set_up_project()
+            target_group, target_releases = set_up_project()
             set_up_project()
 
-            return organization, target_project, target_group, target_group_release
+            return target_group, target_releases
 
         set_up_organization()
-        target_org, target_project, target_group, latest_seen = set_up_organization()
+        target_group, target_releases = set_up_organization()
         set_up_organization()
+
+        return target_group, target_releases
+
+    def _test_current_release(self, group_seen_on_latest_release, environments_to_query):
+        target_group, target_releases = self._set_up_current_release(group_seen_on_latest_release)
 
         self.login_as(user=self.user)
         url = u"/api/0/issues/{}/".format(target_group.id)
-        response = self.client.get(url, {"environment": "production"}, format="json")
+        response = self.client.get(url, {"environment": environments_to_query}, format="json")
         assert response.status_code == 200
-        return response.data["currentRelease"], latest_seen
+        return response.data["currentRelease"], target_releases
 
-    def test_current_release_has_group(self):
-        current_release, group_release = self._test_current_release(True)
+    def test_current_release_has_group_on_one_env(self):
+        current_release, target_releases = self._test_current_release(True, ["production"])
+        prod_release = target_releases["production"]
+
         assert current_release is not None
-        assert current_release["firstSeen"] == group_release.first_seen
-        assert current_release["lastSeen"] == group_release.last_seen
+        assert current_release["firstSeen"] == prod_release.first_seen
+        assert current_release["lastSeen"] == prod_release.last_seen
+
+    def test_current_release_has_group_on_all_envs(self):
+        current_release, target_releases = self._test_current_release(True, [])
+        latest_release = target_releases["development"]
+
+        assert current_release is not None
+        assert current_release["firstSeen"] == latest_release.first_seen
+        assert current_release["lastSeen"] == latest_release.last_seen
 
     def test_current_release_is_later(self):
-        current_release, group_release = self._test_current_release(False)
-        assert current_release is None
+        for envs in [[], ["production"], ["development"], ["production", "development"]]:
+            current_release, target_releases = self._test_current_release(False, envs)
+            assert current_release is None
 
     def test_pending_delete_pending_merge_excluded(self):
         group1 = self.create_group(status=GroupStatus.PENDING_DELETION)
