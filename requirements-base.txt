@@ -46,11 +46,11 @@ qrcode>=6.1.0,<6.2.0
 querystring_parser>=1.2.3,<2.0.0
 rb>=1.7.0,<2.0.0
 redis-py-cluster==1.3.4
-redis>=2.10.3,<2.10.6
+redis>=4.3.6
 requests-oauthlib==1.2.0
-requests[security]>=2.20.0,<2.21.0
+requests>=2.31.0
 sentry-relay>=0.5.10,<0.6.0
-sentry-sdk>=0.13.5
+sentry-sdk>=2.8.0
 simplejson>=3.2.0,<3.9.0
 six>=1.11.0,<1.12.0
 sqlparse>=0.2.0,<0.3.0
@@ -83,3 +83,6 @@ phabricator>=0.6.0,<1.0
 mock==3.0.5 ; python_version < "3.3"
 percy>=1.1.2
 selenium==3.141.0
+certifi>=2024.7.4 # not directly required, pinned by Snyk to avoid a vulnerability
+grpcio>=1.53.2 # not directly required, pinned by Snyk to avoid a vulnerability
+idna>=3.7 # not directly required, pinned by Snyk to avoid a vulnerability
